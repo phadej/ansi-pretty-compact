@@ -1,0 +1,3 @@
+[submodule "prettiest"]
+	path = prettiest
+	url = git@github.com:phadej/prettiest.git

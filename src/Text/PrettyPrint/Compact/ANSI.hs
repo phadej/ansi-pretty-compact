@@ -9,48 +9,53 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 -- |
--- Module      : Text.Pretty.ANSI.Leijen.AnsiPretty
--- License     : BSD3
+-- Module      : Text.PrettyPrint.Compact.ANSI
+-- License     : BSD3 (note: pretty-compact is under GPL)
 -- Maintainer  : Oleg Grenrus <oleg.grenrus@iki.fi>
-module Text.PrettyPrint.ANSI.Leijen.AnsiPretty (
-  -- * Class
-  AnsiPretty(..),
-  -- * Generics
-  -- ** GHC
-  ghcAnsiPretty,
-  ghcAnsiPrettyWith,
-  -- ** SOP
-  sopAnsiPretty,
-  sopAnsiPrettyWith,
-  sopAnsiPrettyS,
-  -- ** Options
-  AnsiPrettyOpts(..),
-  defAnsiPrettyOpts,
-  -- * Re-exports
-  -- | 'Text.PrettyPrint.ANSI.Leijen'
-   module PP,
-   -- ** From generics-sop
-   ConstructorName,
-   FieldName,
-  ) where
+module Text.PrettyPrint.Compact.ANSI (
+    -- * ANSI
+    renderColorDocIO,
+    -- ** Colors
+    black, dullblack,
+    red, dullred,
+    green, dullgreen,
+    yellow, dullyellow,
+    blue, dullblue,
+    magenta, dullmagenta,
+    cyan, dullcyan,
+    white, dullwhite,
+    -- * Class
+    AnsiPretty(..),
+    -- * Generics
+    -- ** GHC
+    ghcAnsiPretty,
+    ghcAnsiPrettyWith,
+    -- ** SOP
+    sopAnsiPretty,
+    sopAnsiPrettyWith,
+    sopAnsiPrettyS,
+    -- ** Options
+    AnsiPrettyOpts(..),
+    defAnsiPrettyOpts,
+    -- * Re-exports
+    -- TODO
+     -- ** From generics-sop
+     ConstructorName,
+     FieldName,
+    ) where
+
+import System.Console.ANSI as ANSI
 
 import           Control.Arrow (first)
 
 import           Data.List as L
-import           Data.List.CommonPrefix (CommonPrefix(CommonPrefix), getCommonPrefix)
 import           Data.List.NonEmpty as NonEmpty
 import qualified Data.Semigroup
 import           Data.Semigroup hiding (All)
 import qualified GHC.Generics as GHC
 import           Generics.SOP as SOP
 import           Generics.SOP.GGP as SOP
-import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<>), (<$>), semiBraces, Pretty)
 
-#if __HADDOCK__
-import qualified Text.PrettyPrint.ANSI.Leijen
-#endif
-
-import qualified Text.PrettyPrint.ANSI.Leijen as L
 import qualified Data.Foldable as Foldable
 
 -- For instances
@@ -78,79 +83,163 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Storable as S
 import qualified Data.Vector.Unboxed as U
 
-#if !MIN_VERSION_generics_sop(0,2,0)
-type SListI (a :: k) = SingI a
-type SList (a :: k) = Sing a
-sList :: forall xs. SListI xs => SList xs
-sList = sing
-#endif
+import Text.PrettyPrint.Compact
+    ( Doc
+    , Options (..)
+    , (<+>)
+    , annotate
+    , char
+    , colon
+    , comma
+    , double
+    , encloseSep
+    , equals
+    , float
+    , hang
+    , int
+    , integer
+    , lbrace
+    , lbracket
+    , lparen
+    , rbrace
+    , rbracket
+    , renderWith
+    , rparen
+    , semi
+    , string
+    , text
+    )
 
--- | Generically derivable colorful analogue of 'Text.PrettyPrint.ANSI.Leijen.Pretty'
+-------------------------------------------------------------------------------
+-- Colors
+-------------------------------------------------------------------------------
+
+data C = C !ANSI.Color !ANSI.ColorIntensity
+type C' = Option (Last C)
+
+type ColorDoc = Doc C'
+
+black, dullblack :: ColorDoc -> ColorDoc
+(black, dullblack) = colorFunctions ANSI.Black
+
+red, dullred :: ColorDoc -> ColorDoc
+(red, dullred) = colorFunctions ANSI.Red
+
+green, dullgreen :: ColorDoc -> ColorDoc
+(green, dullgreen) = colorFunctions ANSI.Green
+
+yellow, dullyellow :: ColorDoc -> ColorDoc
+(yellow, dullyellow) = colorFunctions ANSI.Yellow
+
+blue, dullblue :: ColorDoc -> ColorDoc
+(blue, dullblue) = colorFunctions ANSI.Blue
+
+magenta, dullmagenta :: ColorDoc -> ColorDoc
+(magenta, dullmagenta) = colorFunctions ANSI.Magenta
+
+cyan, dullcyan :: ColorDoc -> ColorDoc
+(cyan, dullcyan) = colorFunctions ANSI.Cyan
+
+white, dullwhite :: ColorDoc -> ColorDoc
+(white, dullwhite) = colorFunctions ANSI.White
+
+colorFunctions :: ANSI.Color -> (ColorDoc -> ColorDoc, ColorDoc -> ColorDoc)
+colorFunctions c = (f ANSI.Vivid, f ANSI.Dull)
+  where
+    f :: ANSI.ColorIntensity -> ColorDoc -> ColorDoc
+    f i = annotate (pure (pure (C c i)))
+
+-------------------------------------------------------------------------------
+-- 
+-------------------------------------------------------------------------------
+
+renderColorDocIO :: ColorDoc -> IO ()
+renderColorDocIO d = renderWith opts d >> putChar '\n'
+  where
+    opts = Options
+        { optsPageWidth = 80
+        , optsAnnotate  = r
+        }
+
+    r :: C' -> String -> IO ()
+    r (Option Nothing) s = putStr s
+    r (Option (Just (Last (C c i)))) s = do
+        setSGR [SetColor Foreground i c]
+        putStr s
+        setSGR [Reset]
+
+-------------------------------------------------------------------------------
+-- AnsiPretty class
+-------------------------------------------------------------------------------
+
+-- | Generically derivable colorful class.
 class AnsiPretty a where
-  ansiPretty :: a -> Doc
+    ansiPretty :: a -> ColorDoc
 
-  default ansiPretty :: (GHC.Generic a, All2 AnsiPretty (GCode a), GFrom a, GDatatypeInfo a) => a -> Doc
-  ansiPretty = ghcAnsiPretty
+    default ansiPretty :: (GHC.Generic a, All2 AnsiPretty (GCode a), GFrom a, GDatatypeInfo a) => a -> ColorDoc
+    ansiPretty = ghcAnsiPretty
 
-  ansiPrettyList :: [a] -> Doc
-  ansiPrettyList = encloseSep (dullgreen lbracket) (dullgreen rbracket) (dullgreen colon) . fmap ansiPretty
+    ansiPrettyList :: [a] -> ColorDoc
+    ansiPrettyList = encloseSep (dullgreen lbracket) (dullgreen rbracket) (dullgreen comma) . fmap ansiPretty
 
-semiBraces :: [Doc] -> Doc
+semiBraces :: [ColorDoc] -> ColorDoc
 semiBraces = encloseSep (dullblue lbrace) (dullblue rbrace) (dullblue semi)
 
-commaParens :: [Doc] -> Doc
+commaParens :: [ColorDoc] -> ColorDoc
 commaParens = encloseSep (dullblue lparen) (dullblue rparen) (dullblue comma)
 
-prettyNewtype :: ConstructorName -> Doc -> Doc
+prettyNewtype :: ConstructorName -> ColorDoc -> ColorDoc
 prettyNewtype = const id
 
-prettyField :: AnsiPretty a => String -> a -> Doc
+prettyField :: AnsiPretty a => String -> a -> ColorDoc
 prettyField name value = black (text name) <+> blue equals <+> ansiPretty value
 
-ansiPrettyNewtype :: AnsiPretty a => String -> a -> Doc
-ansiPrettyNewtype name x = hang 2 (cyan (text name)) </> ansiPretty x
+ansiPrettyNewtype :: AnsiPretty a => String -> a -> ColorDoc
+ansiPrettyNewtype name x = hang 2 (cyan $ text name) $ ansiPretty x
 
-ansiPrettyMap :: (AnsiPretty k, AnsiPretty v) => String -> [(k, v)] -> Doc
-ansiPrettyMap name kv = hang 2 (cyan (text name)) </> encloseSep (dullgreen lbracket) (dullgreen rbracket) (dullgreen colon) (fmap f kv)
+ansiPrettyMap :: (AnsiPretty k, AnsiPretty v) => String -> [(k, v)] -> ColorDoc
+ansiPrettyMap name kv = hang 2 (cyan $ text name) $ encloseSep (dullgreen lbracket) (dullgreen rbracket) (dullgreen colon) (fmap f kv)
   where f (k, v) = ansiPretty k <+> blue colon <+> ansiPretty v
 
-prettyRecord :: String -> [(FieldName, Doc)] -> Doc
-prettyRecord name fields = hang 2 (cyan (text name) </> semiBraces (L.map (uncurry prettyField) fields'))
-  where fields' = L.map (first (L.drop (L.length fieldNamePrefix))) fields
-        fieldNamePrefix = maybe [] (getCommonPrefix . sconcat) $ (fmap . fmap) (CommonPrefix . fst) (nonEmpty fields)
+prettyRecord :: String -> [(FieldName, ColorDoc)] -> ColorDoc
+prettyRecord name fields = hang 2 (cyan $ text name) $
+    semiBraces (L.map (uncurry prettyField) fields')
+  where
+    fields' = L.map (first (L.drop (L.length fieldNamePrefix))) fields
+    fieldNamePrefix = maybe [] (getCommonPrefix . sconcat) $ (fmap . fmap) (CommonPrefix . fst) (nonEmpty fields)
 
 data AnsiPrettyOpts = AnsiPrettyOpts
-  { poPrettyNewtype :: ConstructorName -> Doc -> Doc
-  , poPrettyRecord  :: ConstructorName -> [(FieldName, Doc)] -> Doc
-  }
+    { poPrettyNewtype :: ConstructorName -> ColorDoc -> ColorDoc
+    , poPrettyRecord  :: ConstructorName -> [(FieldName, ColorDoc)] -> ColorDoc
+    }
 
 defAnsiPrettyOpts :: AnsiPrettyOpts
 defAnsiPrettyOpts = AnsiPrettyOpts prettyNewtype prettyRecord
 
 -- GHC
 
-ghcAnsiPretty :: forall a. (GHC.Generic a, All2 AnsiPretty (GCode a), GFrom a, GDatatypeInfo a) => a -> Doc
+ghcAnsiPretty :: forall a. (GHC.Generic a, All2 AnsiPretty (GCode a), GFrom a, GDatatypeInfo a) => a -> ColorDoc
 ghcAnsiPretty = ghcAnsiPrettyWith defAnsiPrettyOpts
 
-ghcAnsiPrettyWith :: forall a. (GHC.Generic a, All2 AnsiPretty (GCode a), GFrom a, GDatatypeInfo a) => AnsiPrettyOpts -> a -> Doc
+ghcAnsiPrettyWith :: forall a. (GHC.Generic a, All2 AnsiPretty (GCode a), GFrom a, GDatatypeInfo a) => AnsiPrettyOpts -> a -> ColorDoc
 ghcAnsiPrettyWith opts x = sopAnsiPrettyS opts (gfrom x) (gdatatypeInfo (Proxy :: Proxy a))
 
 -- SOP
 
-sopAnsiPrettyWith :: forall a. (Generic a, HasDatatypeInfo a, All2 AnsiPretty (Code a)) => AnsiPrettyOpts -> a -> Doc
+sopAnsiPrettyWith :: forall a. (Generic a, HasDatatypeInfo a, All2 AnsiPretty (Code a)) => AnsiPrettyOpts -> a -> ColorDoc
 sopAnsiPrettyWith opts x = sopAnsiPrettyS opts (from x) (datatypeInfo (Proxy :: Proxy a))
 
-sopAnsiPretty :: forall a. (Generic a, HasDatatypeInfo a, All2 AnsiPretty (Code a)) => a -> Doc
+sopAnsiPretty :: forall a. (Generic a, HasDatatypeInfo a, All2 AnsiPretty (Code a)) => a -> ColorDoc
 sopAnsiPretty = sopAnsiPrettyWith defAnsiPrettyOpts
 
-sopAnsiPrettyS :: (All2 AnsiPretty xss) => AnsiPrettyOpts -> SOP I xss -> DatatypeInfo xss -> Doc
+sopAnsiPrettyS :: (All2 AnsiPretty xss) => AnsiPrettyOpts -> SOP I xss -> DatatypeInfo xss -> ColorDoc
 sopAnsiPrettyS  opts (SOP (Z (I x :* Nil))) (Newtype _ _ ci)  = poPrettyNewtype opts (constructorName ci) (ansiPretty x)
 sopAnsiPrettyS  opts (SOP (Z xs)) (ADT _ _ (ci :* Nil)) = poPrettyRecord opts (constructorName ci) (gAnsiPrettyP xs (fieldInfo ci))
 sopAnsiPrettyS _opts (SOP (Z _ )) _ = error "gAnsiPrettyS: redundant Z case" -- TODO
 sopAnsiPrettyS  opts (SOP (S xss)) (ADT m d (_ :* cis)) = sopAnsiPrettyS opts (SOP xss) (ADT m d cis)
 sopAnsiPrettyS _opts (SOP (S _)) _  = error "gAnsiPrettyS: redundant S case"
 
-gAnsiPrettyP :: (All AnsiPretty xs) => NP I xs -> NP FieldInfo xs -> [(FieldName, Doc)]
+gAnsiPrettyP :: (All AnsiPretty xs) => NP I xs -> NP FieldInfo xs -> [(FieldName, ColorDoc)]
 gAnsiPrettyP Nil Nil = []
 gAnsiPrettyP (I x :* xs) (FieldInfo f :* fis) = (f, ansiPretty x) : gAnsiPrettyP xs fis
 #if __GLASGOW_HASKELL__ < 800
@@ -176,46 +265,47 @@ constructorFieldInfos n SCons = FieldInfo ("_" <> show n) :* constructorFieldInf
 -- Instances
 
 instance AnsiPretty Integer where
-  ansiPretty = dullyellow . integer
+    ansiPretty = dullyellow . integer
 
 instance AnsiPretty Int where
-  ansiPretty = dullyellow . int
+    ansiPretty = dullyellow . int
 
 instance AnsiPretty Float where
-  ansiPretty = dullyellow . float
+    ansiPretty = dullyellow . float
 
 instance AnsiPretty Double where
-  ansiPretty = dullyellow . double
+    ansiPretty = dullyellow . double
 
-instance AnsiPretty Doc where
-  ansiPretty = id
+-- | TODO
+instance a ~ C' => AnsiPretty (Doc a) where
+    ansiPretty = id
 
 instance AnsiPretty Bool where
-  ansiPretty True = dullyellow $ string "True"
-  ansiPretty False = dullyellow $ string "False"
+    ansiPretty True = dullyellow $ string "True"
+    ansiPretty False = dullyellow $ string "False"
 
 instance AnsiPretty Char where
-  ansiPretty c = string [c]
-  ansiPrettyList = string
+    ansiPretty c = string [c]
+    ansiPrettyList = string
 
 instance AnsiPretty a => AnsiPretty [a] where
-  ansiPretty = ansiPrettyList
+    ansiPretty = ansiPrettyList
 
 instance AnsiPretty a => AnsiPretty (Maybe a) where
-  ansiPretty (Just x) = ansiPretty x
-  ansiPretty Nothing  = dullcyan (string "Nothing")
+    ansiPretty (Just x) = ansiPretty x
+    ansiPretty Nothing  = dullcyan (string "Nothing")
 
 instance (AnsiPretty a, AnsiPretty b) => AnsiPretty (Either a b)
 
 -- Tuple
 instance (AnsiPretty a, AnsiPretty b) => AnsiPretty (a, b) where
-  ansiPretty (a, b) = commaParens [ansiPretty a, ansiPretty b]
+    ansiPretty (a, b) = commaParens [ansiPretty a, ansiPretty b]
 instance (AnsiPretty a, AnsiPretty b, AnsiPretty c) => AnsiPretty (a, b, c) where
-  ansiPretty (a, b, c) = commaParens [ansiPretty a, ansiPretty b, ansiPretty c]
+    ansiPretty (a, b, c) = commaParens [ansiPretty a, ansiPretty b, ansiPretty c]
 instance (AnsiPretty a, AnsiPretty b, AnsiPretty c, AnsiPretty d) => AnsiPretty (a, b, c, d) where
-  ansiPretty (a, b, c, d) = commaParens [ansiPretty a, ansiPretty b, ansiPretty c, ansiPretty d]
+    ansiPretty (a, b, c, d) = commaParens [ansiPretty a, ansiPretty b, ansiPretty c, ansiPretty d]
 instance (AnsiPretty a, AnsiPretty b, AnsiPretty c, AnsiPretty d, AnsiPretty e) => AnsiPretty (a, b, c, d, e) where
-  ansiPretty (a, b, c, d, e) = commaParens [ansiPretty a, ansiPretty b, ansiPretty c, ansiPretty d, ansiPretty e]
+    ansiPretty (a, b, c, d, e) = commaParens [ansiPretty a, ansiPretty b, ansiPretty c, ansiPretty d, ansiPretty e]
 
 -- Word
 instance AnsiPretty Word where ansiPretty = dullyellow . integer . toInteger
@@ -240,23 +330,20 @@ instance (AnsiPretty a, Integral a) => AnsiPretty (Ratio.Ratio a) where
 #endif
   ansiPretty r = ansiPretty (Ratio.numerator r) <+> dullyellow (char '%') <+> ansiPretty (Ratio.denominator r)
 
--- Generic instances
-instance AnsiPretty a => AnsiPretty (CommonPrefix a)
-
 -- aeson
 instance AnsiPretty Aeson.Value where
     ansiPretty (Aeson.Object o)
         = encloseSep (dullgreen lbrace) (dullgreen rbrace) (dullgreen comma)
         $ fmap f $ HashMap.toList o
       where
-        f (k, v) = dullwhite (ansiPretty k) L.<> blue colon <+> ansiPretty v
+        f (k, v) = dullwhite (ansiPretty k) <> blue colon <+> ansiPretty v
 
     ansiPretty (Aeson.Array a)
         = encloseSep (dullgreen lbracket) (dullgreen rbracket) (dullgreen comma)
         $ fmap ansiPretty $ V.toList a
 
     ansiPretty (Aeson.Number s)
-        = maybe (ansiPretty s) (ansiPretty :: Int -> Doc)
+        = maybe (ansiPretty s) (ansiPretty :: Int -> ColorDoc)
         $ Sci.toBoundedInteger s
 
     ansiPretty (Aeson.String s)   = ansiPretty (show s)
@@ -270,19 +357,19 @@ instance (AnsiPretty i, AnsiPretty e, Array.Ix i, Array.IArray Array.UArray e) =
 
 -- containers
 instance AnsiPretty IntSet.IntSet where
-  ansiPretty = ansiPrettyNewtype "IntSet" . IntSet.toList
+    ansiPretty = ansiPrettyNewtype "IntSet" . IntSet.toList
 instance AnsiPretty v => AnsiPretty (IntMap.IntMap v) where
-  ansiPretty = ansiPrettyMap "IntMap" . IntMap.toList
+    ansiPretty = ansiPrettyMap "IntMap" . IntMap.toList
 instance AnsiPretty a => AnsiPretty (Set.Set a) where
    ansiPretty = ansiPrettyNewtype "Set" . Set.toList
 instance (AnsiPretty k, AnsiPretty v) => AnsiPretty (Map.Map k v) where
-  ansiPretty = ansiPrettyMap "Map" . Map.toList
+    ansiPretty = ansiPrettyMap "Map" . Map.toList
 
 instance AnsiPretty a => AnsiPretty (Seq.Seq a) where ansiPretty = ansiPrettyNewtype "Seq" . Foldable.toList
 
 -- semigroups
 instance AnsiPretty a => AnsiPretty (NonEmpty a) where
-  ansiPretty = ansiPretty . toList
+    ansiPretty = ansiPretty . toList
 
 instance AnsiPretty a => AnsiPretty (Min a)
 instance AnsiPretty a => AnsiPretty (Max a)
@@ -327,4 +414,24 @@ instance (AnsiPretty a, U.Unbox a) => AnsiPretty (U.Vector a) where ansiPretty =
 instance AnsiPretty a => AnsiPretty (HashSet.HashSet a) where ansiPretty = ansiPrettyNewtype "HashSet" . HashSet.toList
 
 instance (AnsiPretty k, AnsiPretty v) => AnsiPretty (HashMap.HashMap k v) where
-  ansiPretty = ansiPrettyMap "HashMap" . HashMap.toList
+    ansiPretty = ansiPrettyMap "HashMap" . HashMap.toList
+
+-------------------------------------------------------------------------------
+-- CommonPrefix
+-------------------------------------------------------------------------------
+
+-- | Longest common prefix of lists.
+newtype CommonPrefix a = CommonPrefix [a]
+  deriving (Eq, Ord, Read, Show)
+
+getCommonPrefix :: CommonPrefix a -> [a]
+getCommonPrefix (CommonPrefix pfx) = pfx
+
+instance Eq a => Semigroup (CommonPrefix a) where
+  CommonPrefix as <> CommonPrefix bs = CommonPrefix (impl as bs)
+    where
+      impl []     _       = []
+      impl _      []      = []
+      impl (x:xs) (y:ys)
+        | x == y          = x : impl xs ys
+        | otherwise       = []
